@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#111111" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="스네이크" />
+  <title>🐍 스네이크 게임</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon-192.svg" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    body {
+      background: #111;
+      color: #fff;
+      font-family: 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 100dvh;
+      padding: env(safe-area-inset-top, 12px) 0 env(safe-area-inset-bottom, 12px);
+      overflow: hidden;
+      touch-action: none;
+    }
+
+    header {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 20px 6px;
+      gap: 32px;
+    }
+
+    .stat { text-align: center; }
+    .stat-label { font-size: 10px; letter-spacing: 2px; color: #555; text-transform: uppercase; }
+    .stat-val { font-size: 22px; font-weight: bold; color: #eee; }
+
+    #canvas-wrap {
+      position: relative;
+      margin: 8px auto;
+    }
+
+    canvas {
+      display: block;
+      border-radius: 6px;
+    }
+
+    #overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.78);
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    #overlay h2 { font-size: 22px; color: #fff; }
+    #overlay .sub { font-size: 13px; color: rgba(255,255,255,0.5); }
+    #overlay button {
+      margin-top: 12px;
+      padding: 10px 32px;
+      background: transparent;
+      border: 1.5px solid rgba(255,255,255,0.4);
+      color: #fff;
+      font-size: 14px;
+      font-family: 'Courier New', monospace;
+      border-radius: 6px;
+      cursor: pointer;
+      letter-spacing: 1px;
+    }
+    #overlay button:active { background: rgba(255,255,255,0.1); }
+
+    #dpad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 6px;
+      margin: 12px auto 0;
+    }
+    .dp {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #1e1e1e;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      font-size: 20px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: background 0.1s;
+    }
+    .dp:active { background: #2e2e2e; }
+    .dp.empty { background: transparent; border-color: transparent; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="stat"><div class="stat-label">점수</div><div class="stat-val" id="score">0</div></div>
+  <div class="stat"><div class="stat-label">최고</div><div class="stat-val" id="best">0</div></div>
+  <div class="stat"><div class="stat-label">레벨</div><div class="stat-val" id="level">1</div></div>
+</header>
+
+<div id="canvas-wrap">
+  <canvas id="cv"></canvas>
+  <div id="overlay">
+    <h2 id="ov-title">🐍 스네이크</h2>
+    <div class="sub" id="ov-sub">화면을 스와이프하거나 버튼으로 조작</div>
+    <button id="ov-btn">시작하기</button>
+  </div>
+</div>
+
+<div id="dpad">
+  <div class="dp empty"></div>
+  <div class="dp" id="d-up">▲</div>
+  <div class="dp empty"></div>
+  <div class="dp" id="d-left">◀</div>
+  <div class="dp empty"></div>
+  <div class="dp" id="d-right">▶</div>
+  <div class="dp empty"></div>
+  <div class="dp" id="d-down">▼</div>
+  <div class="dp empty"></div>
+</div>
+
+<script>
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const COLS = 20, ROWS = 20;
+
+function resize() {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const headerH = document.querySelector('header').offsetHeight;
+  const dpadH = document.getElementById('dpad').offsetHeight || 150;
+  const margin = 28;
+  const available = Math.min(vw - 16, vh - headerH - dpadH - margin * 2);
+  const size = Math.floor(available / COLS) * COLS;
+  cv.width = size; cv.height = size;
+  document.getElementById('canvas-wrap').style.width = size + 'px';
+  document.getElementById('canvas-wrap').style.height = size + 'px';
+  const dpadSize = Math.min(vw - 24, 160);
+  document.getElementById('dpad').style.width = dpadSize + 'px';
+  document.getElementById('dpad').style.height = dpadSize + 'px';
+}
+resize();
+window.addEventListener('resize', () => { resize(); if (!running) drawIdle(); });
+
+const CW = () => cv.width / COLS;
+const CH = () => cv.height / ROWS;
+
+let snake, dir, nextDir, food, score, best = 0, level, running, loop, foodTick = 0;
+
+function rand(n) { return Math.floor(Math.random() * n); }
+
+function placeFood() {
+  let p;
+  do { p = { x: rand(COLS), y: rand(ROWS) }; }
+  while (snake.some(s => s.x === p.x && s.y === p.y));
+  food = p;
+}
+
+function init() {
+  snake = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }];
+  dir = { x: 1, y: 0 }; nextDir = { x: 1, y: 0 };
+  score = 0; level = 1;
+  document.getElementById('score').textContent = 0;
+  document.getElementById('level').textContent = 1;
+  placeFood();
+}
+
+function getSpeed() { return Math.max(80, 200 - (level - 1) * 18); }
+
+function step() {
+  dir = nextDir;
+  const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+  if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS ||
+      snake.some(s => s.x === head.x && s.y === head.y)) {
+    endGame(); return;
+  }
+  snake.unshift(head);
+  if (head.x === food.x && head.y === food.y) {
+    score += 10 * level;
+    if (score > best) { best = score; document.getElementById('best').textContent = best; }
+    document.getElementById('score').textContent = score;
+    level = Math.floor(score / 60) + 1;
+    document.getElementById('level').textContent = level;
+    placeFood();
+    clearInterval(loop);
+    loop = setInterval(step, getSpeed());
+  } else {
+    snake.pop();
+  }
+  draw();
+}
+
+function draw() {
+  foodTick = (foodTick + 1) % 40;
+  const cw = CW(), ch = CH();
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= COLS; i++) {
+    ctx.beginPath(); ctx.moveTo(i * cw, 0); ctx.lineTo(i * cw, cv.height); ctx.stroke();
+  }
+  for (let j = 0; j <= ROWS; j++) {
+    ctx.beginPath(); ctx.moveTo(0, j * ch); ctx.lineTo(cv.width, j * ch); ctx.stroke();
+  }
+
+  const pulse = 1 + 0.1 * Math.sin(foodTick / 40 * Math.PI * 2);
+  const fw = cw * pulse, fh = ch * pulse;
+  ctx.fillStyle = '#e05030';
+  roundRect(ctx, food.x * cw + (cw - fw) / 2, food.y * ch + (ch - fh) / 2, fw, fh, 4);
+  ctx.fill();
+
+  snake.forEach((seg, i) => {
+    const ratio = i / snake.length;
+    if (i === 0) ctx.fillStyle = '#7ee8a2';
+    else if (ratio < 0.4) ctx.fillStyle = '#3db56e';
+    else ctx.fillStyle = '#1f6e3e';
+    const pad = i === 0 ? 1 : 2;
+    roundRect(ctx, seg.x * cw + pad, seg.y * ch + pad, cw - pad * 2, ch - pad * 2, i === 0 ? 5 : 3);
+    ctx.fill();
+  });
+}
+
+function drawIdle() {
+  const cw = CW(), ch = CH();
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+}
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.lineTo(x + w - r, y);
+  c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r);
+  c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h);
+  c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r);
+  c.quadraticCurveTo(x, y, x + r, y);
+  c.closePath();
+}
+
+function endGame() {
+  running = false;
+  clearInterval(loop);
+  document.getElementById('ov-title').textContent = '게임 오버';
+  document.getElementById('ov-sub').textContent = '점수: ' + score;
+  document.getElementById('ov-btn').textContent = '다시 하기';
+  document.getElementById('overlay').style.display = 'flex';
+}
+
+function startGame() {
+  document.getElementById('overlay').style.display = 'none';
+  init(); draw(); running = true;
+  clearInterval(loop);
+  loop = setInterval(step, getSpeed());
+}
+
+document.getElementById('ov-btn').addEventListener('click', startGame);
+
+document.addEventListener('keydown', e => {
+  if (!running) { if (e.key === 'Enter' || e.key === ' ') { startGame(); return; } }
+  const map = { ArrowUp:{x:0,y:-1}, ArrowDown:{x:0,y:1}, ArrowLeft:{x:-1,y:0}, ArrowRight:{x:1,y:0},
+                w:{x:0,y:-1}, s:{x:0,y:1}, a:{x:-1,y:0}, d:{x:1,y:0} };
+  const nd = map[e.key];
+  if (nd && !(nd.x === -dir.x && nd.y === -dir.y)) { nextDir = nd; e.preventDefault(); }
+});
+
+function dpad(dx, dy) {
+  if (!running) return;
+  if (!(dx === -dir.x && dy === -dir.y)) nextDir = { x: dx, y: dy };
+}
+document.getElementById('d-up').addEventListener('click', () => dpad(0,-1));
+document.getElementById('d-down').addEventListener('click', () => dpad(0,1));
+document.getElementById('d-left').addEventListener('click', () => dpad(-1,0));
+document.getElementById('d-right').addEventListener('click', () => dpad(1,0));
+
+let tx = 0, ty = 0;
+document.getElementById('canvas-wrap').addEventListener('touchstart', e => {
+  tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+}, { passive: true });
+document.getElementById('canvas-wrap').addEventListener('touchend', e => {
+  if (!running) { startGame(); return; }
+  const dx = e.changedTouches[0].clientX - tx;
+  const dy = e.changedTouches[0].clientY - ty;
+  if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    dpad(dx > 0 ? 1 : -1, 0);
+  } else {
+    dpad(0, dy > 0 ? 1 : -1);
+  }
+}, { passive: true });
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+drawIdle();
+</script>
+</body>
+</html>
